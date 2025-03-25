@@ -29,13 +29,13 @@ class SmartAttendanceSystem:
         self.video_capture = None
         self.is_running = False
         self.next_id = 0
+
+        # IMPORTANT: build UI first so widgets like status_label exist before model training
+        self.setup_ui()
         
-        # Load existing data
+        # Now load existing data and attendance (these may retrain the recognizer)
         self.load_data()
         self.load_attendance()
-        
-        # Setup UI
-        self.setup_ui()
         
     def setup_ui(self):
         # Title
@@ -331,7 +331,9 @@ class SmartAttendanceSystem:
             
             messagebox.showinfo("Success", f"{name} registered successfully!")
             self.name_entry.delete(0, tk.END)
-            self.status_label.config(text=f"✓ {name} registered successfully")
+            # Safe update of status_label
+            if hasattr(self, "status_label"):
+                self.status_label.config(text=f"✓ {name} registered successfully")
             self.update_displays()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to register: {str(e)}")
@@ -386,7 +388,8 @@ class SmartAttendanceSystem:
             self.train_recognizer()
             messagebox.showinfo("Success", f"{name} registered successfully!")
             self.name_entry.delete(0, tk.END)
-            self.status_label.config(text=f"✓ {name} registered successfully")
+            if hasattr(self, "status_label"):
+                self.status_label.config(text=f"✓ {name} registered successfully")
             self.update_displays()
     
     def train_recognizer(self):
@@ -394,14 +397,26 @@ class SmartAttendanceSystem:
         labels = []
         
         for name, face_list in self.known_faces.items():
-            face_id = [k for k, v in self.face_id_map.items() if v == name][0]
+            # find id for this name (safe retrieval)
+            ids = [k for k, v in self.face_id_map.items() if v == name]
+            if not ids:
+                continue
+            face_id = ids[0]
             for face_img in face_list:
                 faces.append(face_img)
                 labels.append(face_id)
         
         if len(faces) > 0:
-            self.recognizer.train(faces, np.array(labels))
-            self.status_label.config(text="✓ Model trained with registered faces")
+            try:
+                self.recognizer.train(faces, np.array(labels))
+                # Safe update of status_label (in case called before UI built)
+                if hasattr(self, "status_label"):
+                    self.status_label.config(text="✓ Model trained with registered faces")
+            except Exception as e:
+                # handle unexpected recognizer training errors
+                if hasattr(self, "status_label"):
+                    self.status_label.config(text=f"Model training failed: {e}")
+                print("Recognizer training error:", e)
     
     def start_camera(self):
         if len(self.known_faces) == 0:
@@ -412,7 +427,8 @@ class SmartAttendanceSystem:
         self.is_running = True
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
-        self.status_label.config(text="📹 Camera active - Detecting faces...")
+        if hasattr(self, "status_label"):
+            self.status_label.config(text="📹 Camera active - Detecting faces...")
         self.process_video()
     
     def stop_camera(self):
@@ -422,7 +438,8 @@ class SmartAttendanceSystem:
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.video_label.config(image="")
-        self.status_label.config(text="Camera stopped")
+        if hasattr(self, "status_label"):
+            self.status_label.config(text="Camera stopped")
     
     def process_video(self):
         if not self.is_running:
@@ -438,11 +455,14 @@ class SmartAttendanceSystem:
                 face_img = cv2.resize(face_img, (200, 200))
                 
                 # Recognize face
-                label, confidence = self.recognizer.predict(face_img)
+                try:
+                    label, confidence = self.recognizer.predict(face_img)
+                except Exception:
+                    label, confidence = -1, 9999
                 name = "Unknown"
                 
                 # Lower confidence = better match (typical threshold: 50-100)
-                if confidence < 70:
+                if confidence < 70 and label in self.face_id_map:
                     name = self.face_id_map.get(label, "Unknown")
                     if name != "Unknown":
                         self.mark_attendance(name)
@@ -452,13 +472,16 @@ class SmartAttendanceSystem:
                 cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
                 cv2.rectangle(frame, (x, y-35), (x+w, y), color, cv2.FILLED)
                 
-                text = f"{name} ({int(confidence)})" if name != "Unknown" else "Unknown"
+                text = f"{name} ({int(confidence)})" if name != "Unknown" and confidence < 1000 else "Unknown"
                 cv2.putText(frame, text, (x+6, y-6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
             # Convert to PhotoImage
             cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(cv2image)
-            img = img.resize((640, 480), Image.Resampling.LANCZOS)
+            try:
+                img = img.resize((640, 480), Image.Resampling.LANCZOS)
+            except Exception:
+                img = img.resize((640, 480), Image.ANTIALIAS)
             imgtk = ImageTk.PhotoImage(image=img)
             self.video_label.imgtk = imgtk
             self.video_label.configure(image=imgtk)
@@ -473,7 +496,8 @@ class SmartAttendanceSystem:
             self.attendance_records[name] = current_time
             self.save_attendance()
             self.update_displays()
-            self.status_label.config(text=f"✓ Attendance marked for {name} at {current_time}")
+            if hasattr(self, "status_label"):
+                self.status_label.config(text=f"✓ Attendance marked for {name} at {current_time}")
     
     def update_displays(self):
         # Update users list
@@ -510,7 +534,8 @@ class SmartAttendanceSystem:
             f.write("=" * 60 + "\n")
         
         messagebox.showinfo("Success", f"Attendance exported to {filename}")
-        self.status_label.config(text=f"✓ Exported to {filename}")
+        if hasattr(self, "status_label"):
+            self.status_label.config(text=f"✓ Exported to {filename}")
     
     def __del__(self):
         if self.video_capture:
